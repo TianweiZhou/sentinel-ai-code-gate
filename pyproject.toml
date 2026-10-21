@@ -1,7 +1,7 @@
 [project]
 name = "sentinel-gate"
-version = "1.0.0"
-description = "A quality gate for AI-generated Python code: lint, types, security, tests, coverage, mutation testing and requirement tracing, with an LLM repair loop."
+version = "2.0.0"
+description = "Merge-readiness review for pull requests written by coding agents: acceptance criteria proven by tests, quality on changed lines, test integrity and mutation testing, with an optional AI reviewer that can only escalate."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

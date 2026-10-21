@@ -1,72 +1,65 @@
-"""Requirement traceability: every requirement must be proven by at least one passing test."""
+"""Does the PR do what was asked? Acceptance criteria from the linked issue, each traced to passing tests."""
 
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
-from sentinel.models import Requirement, RequirementStatus, RequirementTrace, TestResult
+from sentinel.models import AcceptanceCriterion, ACStatus, ACTrace, TestResult
 
-_REQ_LINE = re.compile(r"^\s*[-*]?\s*(R\d+)\s*[:.)-]\s*(.+)$", re.MULTILINE)
-
-
-def parse_requirements(spec: str) -> list[Requirement]:
-    return [Requirement(id=m.group(1), text=m.group(2).strip()) for m in _REQ_LINE.finditer(spec)]
-
-
-_REQ_MARKER = re.compile(r"mark\.req\(([^)]*)\)")
+_AC_LINE = re.compile(r"^\s*(?:[-*]\s*)?(?:\[[ xX]\]\s*)?\**(AC-?\d+)\**\s*[:.)-]\s*(.+?)\s*$", re.MULTILINE)
+_LINKED = re.compile(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)")
+_MARKER = re.compile(r"mark\.req\(([^)]*)\)")
 
 
-def declared_in_tests(test_source: str) -> set[str]:
-    """Requirement ids referenced by `@pytest.mark.req(...)`, read statically so we
-    still know the linkage when the suite crashes before running."""
-    return {rid for args in _REQ_MARKER.findall(test_source) for rid in re.findall(r"R\d+", args)}
+def linked_issue(pr_body: str) -> int | None:
+    m = _LINKED.search(pr_body or "")
+    return int(m.group(1)) if m else None
 
 
-def trace(requirements: list[Requirement], tests: list[TestResult], test_source: str) -> list[RequirementTrace]:
-    declared = declared_in_tests(test_source)
-    traces = []
-    for req in requirements:
-        covering = [t for t in tests if req.id in t.requirement_ids]
-        passed = sum(t.passed for t in covering)
-        status: RequirementStatus
-        if not covering and req.id in declared:
-            status, evidence = "missing", "Linked tests exist but could not run against this code."
-        elif not covering:
-            status, evidence = "untested", "No test is marked with this requirement."
-        elif passed == len(covering):
-            status, evidence = "met", f"{passed}/{len(covering)} linked tests pass."
-        elif passed == 0:
-            status, evidence = "missing", f"All {len(covering)} linked tests fail."
-        else:
-            status, evidence = "partial", f"{passed}/{len(covering)} linked tests pass."
-        traces.append(RequirementTrace(id=req.id, text=req.text, status=status,
-                                       tests=[t.name for t in covering], evidence=evidence))
-    return traces
+def parse_criteria(text: str, source: str) -> list[AcceptanceCriterion]:
+    return [AcceptanceCriterion(id=m.group(1).replace("-", "").upper(), text=m.group(2), source=source)
+            for m in _AC_LINE.finditer(text or "")]
 
 
-_RANK = {"missing": 0, "partial": 1, "met": 2}
+def collect(pr_body: str, issue_body: str | None, issue_number: int | None) -> list[AcceptanceCriterion]:
+    """Issue criteria are the contract; the PR description can add more but cannot redefine them."""
+    criteria: dict[str, AcceptanceCriterion] = {}
+    for ac in parse_criteria(pr_body, "PR description"):
+        criteria[ac.id] = ac
+    for ac in parse_criteria(issue_body or "", f"issue #{issue_number}" if issue_number else "issue"):
+        criteria[ac.id] = ac
+    return sorted(criteria.values(), key=lambda a: int(re.sub(r"\D", "", a.id) or 0))
 
 
-def merge_judge(traces: list[RequirementTrace], verdicts: dict[str, tuple[str, str]]) -> list[RequirementTrace]:
-    """Combine test evidence with an LLM reviewer's verdict.
-
-    Tests are authoritative. The judge may only *downgrade* (catch something the
-    tests missed) or comment on an untested requirement — capped at "partial",
-    because an opinion is not proof. It can never turn a failing requirement green.
-    """
-    merged = []
-    for t in traces:
-        if t.id not in verdicts:
-            merged.append(t)
+def declared_in_tests(root: Path) -> set[str]:
+    """AC ids referenced by @pytest.mark.req anywhere in the repo's tests (read statically)."""
+    ids: set[str] = set()
+    for path in root.rglob("test*.py"):
+        if any(part.startswith(".") or part in ("node_modules", "venv") for part in path.parts):
             continue
-        status, why = verdicts[t.id]
-        if t.status == "untested":
-            capped: RequirementStatus = "partial" if status == "met" else ("missing" if status == "missing" else "partial")
-            merged.append(t.model_copy(update={"status": capped, "source": "llm-judge",
-                                               "evidence": f"No test. Judge: {why}"}))
-        elif _RANK.get(status, 2) < _RANK[t.status]:
-            merged.append(t.model_copy(update={"status": status, "source": "tests+llm-judge",
-                                               "evidence": f"{t.evidence} Judge disagrees: {why}"}))
+        for args in _MARKER.findall(path.read_text(errors="ignore")):
+            ids.update(m.replace("-", "").upper() for m in re.findall(r"AC-?\d+", args))
+    return ids
+
+
+def trace(criteria: list[AcceptanceCriterion], tests: list[TestResult], declared: set[str]) -> list[ACTrace]:
+    traces = []
+    for ac in criteria:
+        tagged = [t for t in tests if ac.id in {r.replace("-", "").upper() for r in t.requirement_ids}]
+        covering = [t for t in tagged if t.message != "skipped"]
+        passed = sum(t.passed for t in covering)
+        status: ACStatus
+        if not covering and tagged:
+            status, evidence = "not_run", f"Its {len(tagged)} linked test(s) are skipped — nothing proves it."
+        elif not covering and ac.id in declared:
+            status, evidence = "not_run", "Tests are tagged with this criterion but did not run."
+        elif not covering:
+            status, evidence = "untested", "No test is tagged with this criterion — nothing proves it."
+        elif passed == len(covering):
+            status, evidence = "proven", f"{passed}/{len(covering)} linked tests pass."
         else:
-            merged.append(t.model_copy(update={"source": "tests+llm-judge", "evidence": f"{t.evidence} Judge: {why}"}))
-    return merged
+            status, evidence = "failing", f"{len(covering) - passed}/{len(covering)} linked tests fail."
+        traces.append(ACTrace(id=ac.id, text=ac.text, source=ac.source, status=status,
+                              tests=[t.nodeid for t in tagged], evidence=evidence))
+    return traces
