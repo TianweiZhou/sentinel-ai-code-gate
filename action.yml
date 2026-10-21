@@ -47,10 +47,11 @@ runs:
         if [ "${{ inputs.install-command }}" != "auto" ]; then
           ${{ inputs.install-command }}
         elif [ -f pyproject.toml ] && grep -q '^\[project\]' pyproject.toml; then
-          python -m pip install --quiet -e . && (python -m pip install --quiet --group dev 2>/dev/null || true)
+          python -m pip install --quiet -e . || echo "::warning::Could not pip-install this repository; tests will run from the repo root."
+          python -m pip install --quiet --group dev 2>/dev/null || true
         fi
         for f in requirements.txt requirements-dev.txt; do
-          [ -f "$f" ] && python -m pip install --quiet -r "$f"
+          if [ -f "$f" ]; then python -m pip install --quiet -r "$f" || echo "::warning::Could not install $f"; fi
         done
         python -m pip install --quiet pytest
 
