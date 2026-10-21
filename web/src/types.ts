@@ -63,8 +63,8 @@ export const STAGES: { id: StageId; label: string; hint: string }[] = [
   { id: "verdict", label: "Verdict", hint: "Ready / Merge after checks / Do not merge" },
 ];
 
-export const VERDICT_META: Record<VerdictKind, { icon: string; label: string; cls: string }> = {
-  ready: { icon: "✅", label: "Ready to merge", cls: "ready" },
-  after_checks: { icon: "🟡", label: "Merge after checks", cls: "checks" },
-  do_not_merge: { icon: "⛔", label: "Do not merge", cls: "block" },
+export const VERDICT_META: Record<VerdictKind, { label: string; short: string; cls: string }> = {
+  ready: { label: "Ready to merge", short: "Ready", cls: "ready" },
+  after_checks: { label: "Merge after checks", short: "Needs a look", cls: "checks" },
+  do_not_merge: { label: "Do not merge", short: "Blocked", cls: "block" },
 };

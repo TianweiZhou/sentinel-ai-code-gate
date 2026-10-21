@@ -18,12 +18,12 @@ export function Queue({ items, selected, onSelect, live }: {
       <div className="queue-filters">
         {(["all", "do_not_merge", "after_checks", "ready"] as Filter[]).map((f) => (
           <button key={f} className={`qf ${filter === f ? "on" : ""}`} onClick={() => setFilter(f)}>
-            {f === "all" ? `All ${items.length}` : `${VERDICT_META[f].icon} ${counts[f]}`}
+            {f === "all" ? <>All <i>{items.length}</i></> : <><span className={`dot ${VERDICT_META[f].cls}`} />{VERDICT_META[f].short} <i>{counts[f]}</i></>}
           </button>
         ))}
       </div>
       {live && (
-        <motion.div className="q-item live" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+        <motion.div className="q-item live" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
           <span className="q-dot" /><div><b>Reviewing</b><span>{live}</span></div>
         </motion.div>
       )}
@@ -32,8 +32,8 @@ export function Queue({ items, selected, onSelect, live }: {
           const m = VERDICT_META[i.verdict];
           return (
             <motion.button key={i.id} layout className={`q-item ${m.cls} ${selected === i.id ? "active" : ""}`} onClick={() => onSelect(i.id)}
-              initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}>
-              <span className="q-icon">{m.icon}</span>
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <span className={`dot ${m.cls}`} />
               <div className="q-main">
                 <span className="q-repo">{i.repo}{i.number ? ` #${i.number}` : ""}</span>
                 <b>{i.title}</b>
@@ -59,13 +59,13 @@ export function Reasons({ report }: { report: Report }) {
   return (
     <ul className="reasons">
       {v.blockers.map((b, i) => (
-        <motion.li key={`b${i}`} className="block" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.06 }}>
-          <span className="tag">BLOCKER</span><Md text={b} />
+        <motion.li key={`b${i}`} className="block" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.04 }}>
+          <span className="tag">Blocker</span><Md text={b} />
         </motion.li>
       ))}
       {v.checks.map((c, i) => (
-        <motion.li key={`c${i}`} className="check" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: (v.blockers.length + i) * 0.06 }}>
-          <span className="tag">CHECK</span><Md text={c} />
+        <motion.li key={`c${i}`} className="check" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: (v.blockers.length + i) * 0.04 }}>
+          <span className="tag">Check</span><Md text={c} />
         </motion.li>
       ))}
     </ul>
@@ -107,7 +107,7 @@ export function Checklist({ report }: { report: Report }) {
 // ---------- acceptance criteria ----------
 
 const AC_TEXT: Record<ACTrace["status"], string> = {
-  proven: "PROVEN", failing: "FAILING", not_run: "NOT RUN", untested: "NO TEST", disputed: "DISPUTED",
+  proven: "Proven", failing: "Failing", not_run: "Not run", untested: "No test", disputed: "Disputed",
 };
 
 export function Criteria({ items }: { items: ACTrace[] }) {
@@ -115,7 +115,7 @@ export function Criteria({ items }: { items: ACTrace[] }) {
   return (
     <div className="reqs">
       {items.map((c, i) => (
-        <motion.div key={c.id} className={`req req-${c.status}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}>
+        <motion.div key={c.id} className={`req req-${c.status}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.04 }}>
           <span className="req-id">{c.id}</span>
           <div className="req-body">
             <div className="req-text"><Md text={c.text} /></div>
@@ -148,7 +148,7 @@ export function TestStrength({ report }: { report: Report }) {
           {mutants.map((m, i) => (
             <motion.span key={m.id} className={`mut ${m.killed ? "killed" : "survived"}`}
               title={`${m.path}:${m.line} ${m.description} — ${m.killed ? "caught" : "NOT caught by any test"}`}
-              initial={{ scale: 0, rotate: 45 }} animate={{ scale: 1, rotate: 0 }} transition={{ delay: i * 0.03, type: "spring", stiffness: 400, damping: 15 }} />
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }} />
           ))}
         </div>
       ) : <div className="empty">Mutation testing plants small bugs on the changed lines once all tests pass, and checks the tests catch them.</div>}
@@ -201,7 +201,7 @@ export function Files({ report }: { report: Report }) {
           const count = report.findings.filter((x) => x.path === f.path && SEV_ORDER.indexOf(x.severity) <= 2).length;
           return (
             <button key={f.path} className={`ftab ${i === active ? "on" : ""}`} onClick={() => setActive(i)}>
-              {f.is_test ? "🧪 " : ""}{f.path}<i>+{f.added_lines.length}</i>{count > 0 && <em>{count}</em>}
+              {f.path}{f.is_test ? <span className="ftab-kind">test</span> : null}<i>+{f.added_lines.length}</i>{count > 0 && <em>{count}</em>}
             </button>
           );
         })}
@@ -218,7 +218,7 @@ export function Files({ report }: { report: Report }) {
               <span className="txt">{r.text || " "}</span>
             </div>
             {r.kind === "add" && r.n && byLine.get(r.n)?.map((f, j) => (
-              <motion.div key={j} className={`inline-note sev-${f.severity}`} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}>
+              <motion.div key={j} className={`inline-note sev-${f.severity}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                 <b>{f.source === "ai" ? "AI reviewer" : `${f.stage} · ${f.rule}`}</b> {f.message}
               </motion.div>
             ))}

@@ -1,9 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getHealth, getReport, getReports, stream, syncRepo } from "./api";
-import { Background } from "./components/Background";
 import { idleStages, Pipeline, type StageMap } from "./components/Pipeline";
-import { Radar } from "./components/Radar";
 import { Checklist, Criteria, Files, Queue, Reasons, TestStrength } from "./components/Review";
 import { VerdictHero } from "./components/Verdict";
 import type { Health, Report, ReportSummary, StageId, StreamEvent } from "./types";
@@ -12,13 +10,15 @@ function Card({ title, kicker, children, className = "", delay = 0 }: {
   title: string; kicker?: string; children: React.ReactNode; className?: string; delay?: number;
 }) {
   return (
-    <motion.section className={`card ${className}`} initial={{ opacity: 0, y: 20, filter: "blur(6px)" }}
-      animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} transition={{ delay, duration: 0.55, ease: [0.16, 1, 0.3, 1] }}>
+    <motion.section className={`card ${className}`} initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }} transition={{ delay, duration: 0.4, ease: "easeOut" }}>
       <header className="card-head"><h2>{title}</h2>{kicker && <span>{kicker}</span>}</header>
       {children}
     </motion.section>
   );
 }
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 const stagesOf = (r: Report): StageMap => {
   const m = idleStages();
@@ -103,31 +103,20 @@ export default function App() {
 
   return (
     <div className="app">
-      <Background intensity={running ? 1 : 0} />
-
       <header className="topbar">
         <div className="brand">
-          <div className="logo">
-            <svg viewBox="0 0 48 48">
-              <circle cx="24" cy="24" r="21" className="logo-orbit" />
-              <path d="M24 8 36 13v9c0 8-5.2 13.4-12 16-6.8-2.6-12-8-12-16v-9z" className="logo-shield" />
-              <path d="m18.5 24 4 4 7.5-8" className="logo-check" />
-            </svg>
-          </div>
-          <div>
-            <h1>SENTINEL</h1>
-            <p>Merge-readiness review for agent-written PRs</p>
-          </div>
+          <h1>Sentinel</h1>
+          <p>Merge-readiness review for agent-written pull requests</p>
         </div>
         <div className="toolbar">
-          <span className={`pill ${health?.ai_reviewer ? "live" : ""}`}><i />{health ? (health.ai_reviewer ? `AI reviewer · ${health.model}` : "AI reviewer off · tools only") : "connecting…"}</span>
+          <span className="pill"><i className={health?.ai_reviewer ? "on" : ""} />{health ? (health.ai_reviewer ? `AI reviewer on · ${health.model}` : "AI reviewer off") : "Connecting…"}</span>
           <div className="sync">
             <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" spellCheck={false} />
             <button className="btn ghost" disabled={running} onClick={sync}>Sync GitHub</button>
           </div>
           <button className="btn primary" disabled={running} onClick={runDemo}>
-            {running ? <span className="btn-spinner" /> : <span className="btn-glyph">▶</span>}
-            {running ? "Reviewing…" : "Review demo PRs"}
+            {running && <span className="btn-spinner" />}
+            {running ? "Reviewing" : "Review demo PRs"}
           </button>
         </div>
       </header>
@@ -143,7 +132,7 @@ export default function App() {
 
       <main className="layout">
         <aside>
-          <Card title="Review queue" kicker="every open PR, worst first" className="queue-card">
+          <Card title="Review queue" kicker="Worst first" className="queue-card">
             <Queue items={[...queue].sort((a, b) => ["do_not_merge", "after_checks", "ready"].indexOf(a.verdict) - ["do_not_merge", "after_checks", "ready"].indexOf(b.verdict))}
               selected={selected} onSelect={(id) => { if (!running) setSelected(id); }} live={live} />
           </Card>
@@ -154,36 +143,31 @@ export default function App() {
             <VerdictHero report={report} running={running} liveTitle={live ?? undefined} />
           </Card>
 
-          <Card title="Evidence pipeline" kicker={live ? "streaming from the engine" : "tools & tests decide · AI can only escalate"} delay={0.1}>
+          <Card title="Evidence pipeline" kicker={live ? "Running" : "Tools and tests decide. AI can only escalate."} delay={0.1}>
             <Pipeline stages={pipeline} />
           </Card>
 
           {report && v && (
             <>
               <div className="row-2">
-                <Card title={v.kind === "ready" ? "Why it's ready" : "Why"} kicker={`${v.blockers.length} blockers · ${v.checks.length} checks`} delay={0.12}>
+                <Card title={v.kind === "ready" ? "Why it's ready" : "Why"} kicker={`${plural(v.blockers.length, "blocker")}, ${plural(v.checks.length, "check")}`} delay={0.12}>
                   <Reasons report={report} />
                 </Card>
-                <Card title="Your review checklist" kicker="what tools can't decide for you" delay={0.16}>
+                <Card title="Your review checklist" kicker="What tools can't decide for you" delay={0.16}>
                   <Checklist report={report} />
                 </Card>
               </div>
 
-              <Card title="Acceptance criteria" kicker="each must be proven by a passing test" delay={0.2}>
+              <Card title="Acceptance criteria" kicker="Each must be proven by a passing test" delay={0.2}>
                 <Criteria items={report.criteria} />
               </Card>
 
-              <div className="row-2">
-                <Card title="Can we trust the tests?" kicker="changed-line coverage · mutation testing" delay={0.24}>
-                  <TestStrength report={report} />
-                </Card>
-                <Card title="Quality dimensions" kicker={`overall ${report.overall}/100`} delay={0.28}>
-                  <Radar scores={report.scores} />
-                  {report.ai_summary && <p className="ai-summary"><b>AI reviewer:</b> {report.ai_summary}</p>}
-                </Card>
-              </div>
+              <Card title="Can we trust the tests?" kicker="Changed-line coverage and mutation testing" delay={0.24}>
+                <TestStrength report={report} />
+                {report.ai_summary && <p className="ai-summary"><b>AI reviewer:</b> {report.ai_summary}</p>}
+              </Card>
 
-              <Card title="Changed lines" kicker="findings shown where they occur" delay={0.32}>
+              <Card title="Changed lines" kicker="Findings shown where they occur" delay={0.32}>
                 <Files report={report} />
               </Card>
             </>
@@ -191,7 +175,7 @@ export default function App() {
         </div>
       </main>
 
-      <footer className="foot">AI advises · rules enforce · humans decide — Sentinel never merges</footer>
+      <footer className="foot">AI advises, rules enforce, humans decide. Sentinel never merges.</footer>
     </div>
   );
 }

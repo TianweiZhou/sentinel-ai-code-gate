@@ -30,8 +30,7 @@ export function Pipeline({ stages }: { stages: StageMap }) {
   return (
     <div className="pipeline">
       <div className="pipeline-track">
-        <motion.div className="pipeline-fill" animate={{ scaleX: progress }} transition={{ type: "spring", stiffness: 60, damping: 18 }} />
-        <div className="pipeline-pulse" style={{ opacity: progress > 0 && progress < 1 ? 1 : 0 }} />
+        <motion.div className="pipeline-fill" animate={{ scaleX: progress }} transition={{ duration: 0.4, ease: "easeOut" }} />
       </div>
       <div className="pipeline-nodes" style={{ gridTemplateColumns: `repeat(${STAGES.length}, minmax(0, 1fr))` }}>
         {STAGES.map((s, i) => {
@@ -41,22 +40,12 @@ export function Pipeline({ stages }: { stages: StageMap }) {
               key={s.id}
               className={`node node-${st.status}`}
               title={s.hint}
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.03 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: i * 0.02 }}
             >
               <div className="node-orb">
-                {st.status === "running" && <span className="node-spinner" />}
-                <motion.svg
-                  viewBox="0 0 24 24" className="node-icon" key={st.status}
-                  initial={{ scale: 0.6, rotate: -20 }} animate={{ scale: 1, rotate: 0 }}
-                  transition={{ type: "spring", stiffness: 300, damping: 14 }}
-                >
-                  <path d={ICONS[s.id]} />
-                </motion.svg>
-                {(st.status === "pass" || st.status === "fail" || st.status === "warn") && (
-                  <motion.span className="node-burst" initial={{ scale: 0.6, opacity: 0.9 }} animate={{ scale: 2.4, opacity: 0 }} transition={{ duration: 0.8 }} />
-                )}
+                <svg viewBox="0 0 24 24" className="node-icon"><path d={ICONS[s.id]} /></svg>
               </div>
               <div className="node-label">{s.label}</div>
               <div className="node-summary" title={st.summary}>{st.status === "running" ? "checking…" : st.summary ?? " "}</div>
