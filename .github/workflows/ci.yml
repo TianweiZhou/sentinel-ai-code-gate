@@ -7,10 +7,9 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
-  # Sentinel holds itself to the same bar it enforces.
+  # Sentinel holds itself to the bar it enforces.
   self-check:
     runs-on: ubuntu-latest
     steps:
@@ -21,22 +20,11 @@ jobs:
         run: uv run ruff check sentinel tests
       - name: Types
         run: uv run mypy sentinel
-      - name: Tests (unit + every demo scenario end-to-end)
+      - name: Tests (rules + the three demo PRs end to end)
         run: uv run pytest -q
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Build dashboard
+      - name: Build review console
         run: npm ci && npm run build
-
-  # Dogfooding: gate the example module with the reusable action in this repo.
-  quality-gate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./
-        with:
-          code: examples/rate_limiter/solution.py
-          tests: examples/rate_limiter/test_solution.py
-          spec: examples/rate_limiter/SPEC.md

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Sentinel — a quality gate that verifies AI-generated code against requirements, tests, security and maintainability rules, with an automatic repair loop.",
+  "description": "Sentinel review console: merge-readiness verdicts for agent-written pull requests.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p . && vite build",

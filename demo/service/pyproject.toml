@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shop-demo"
+version = "0.1.0"
+description = "A small order-pricing service used to demonstrate reviewing agent-written pull requests."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["shop"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"
+markers = ["req(*ids): acceptance criteria this test verifies, e.g. req('AC1')"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "B", "UP", "SIM", "RET", "N"]
+
+[tool.mypy]
+strict = true
+
+[tool.sentinel]
+min_diff_coverage = 80
+min_mutation_score = 70
+max_complexity = 8
+sensitive_paths = ["shop/payments/"]

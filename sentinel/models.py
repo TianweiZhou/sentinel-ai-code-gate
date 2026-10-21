@@ -1,4 +1,4 @@
-"""Data model shared by the engine, the API, the CLI and (as JSON) the web UI."""
+"""Data model shared by the engine, the CLI, the GitHub integration and (as JSON) the review console."""
 
 from __future__ import annotations
 
@@ -8,128 +8,135 @@ from pydantic import BaseModel, Field
 
 Severity = Literal["critical", "high", "medium", "low", "info"]
 StageId = Literal[
-    "generate", "parse", "imports", "lint", "types", "complexity",
-    "security", "tests", "coverage", "mutation", "requirements", "gate",
+    "diff", "requirements", "imports", "lint", "types", "complexity", "security",
+    "integrity", "tests", "coverage", "mutation", "ai_review", "verdict",
 ]
 StageStatus = Literal["idle", "running", "pass", "warn", "fail", "skipped"]
-RequirementStatus = Literal["met", "partial", "missing", "untested"]
-IterationSource = Literal["input", "generated", "llm-repair", "replay-repair"]
+VerdictKind = Literal["ready", "after_checks", "do_not_merge"]
+ACStatus = Literal["proven", "failing", "untested", "not_run", "disputed"]
 
 STAGE_ORDER: list[StageId] = [
-    "parse", "imports", "lint", "types", "complexity",
-    "security", "tests", "coverage", "mutation", "requirements", "gate",
+    "diff", "requirements", "imports", "lint", "types", "complexity", "security",
+    "integrity", "tests", "coverage", "mutation", "ai_review", "verdict",
 ]
 
 
-class Issue(BaseModel):
+class Finding(BaseModel):
     stage: StageId
     rule: str
     severity: Severity
     message: str
+    path: str | None = None
     line: int | None = None
+    source: Literal["tool", "ai"] = "tool"
 
 
-class Requirement(BaseModel):
+class ChangedFile(BaseModel):
+    path: str
+    status: Literal["added", "modified", "deleted", "renamed"]
+    added_lines: list[int] = Field(default_factory=list)
+    is_test: bool = False
+    patch: str = ""  # unified diff for this file (truncated), rendered by the console
+
+
+class AcceptanceCriterion(BaseModel):
     id: str
     text: str
+    source: str  # e.g. "issue #12" or "PR description"
 
 
 class TestResult(BaseModel):
     __test__ = False  # not a pytest test class
 
-    name: str
+    nodeid: str
     requirement_ids: list[str] = Field(default_factory=list)
     passed: bool
     message: str | None = None
     duration_ms: float = 0.0
 
 
-class RequirementTrace(BaseModel):
+class ACTrace(BaseModel):
     id: str
     text: str
-    status: RequirementStatus
+    source: str
+    status: ACStatus
     tests: list[str]
     evidence: str
-    source: Literal["tests", "llm-judge", "tests+llm-judge"] = "tests"
 
 
 class FunctionMetric(BaseModel):
+    path: str
     name: str
     line: int
     complexity: int
-    rank: str
     length: int
     max_depth: int
-    params: int
 
 
 class Mutant(BaseModel):
     id: int
+    path: str
     line: int
     description: str
     killed: bool
 
 
-class Coverage(BaseModel):
-    line_percent: float
-    branch_percent: float | None
-    missing_lines: list[int]
+class DiffCoverage(BaseModel):
+    covered: int
+    total: int
+    percent: float | None
+    uncovered: dict[str, list[int]] = Field(default_factory=dict)
 
 
 class Scores(BaseModel):
-    correctness: int
     requirements: int
+    correctness: int
     security: int
     test_strength: int
     maintainability: int
-    style: int
+    integrity: int
 
 
-class Gate(BaseModel):
-    passed: bool
-    overall: int
-    threshold: int
-    blockers: list[str]
-    # Blockers the AI is allowed to fix by rewriting the code. Anything else
-    # (weak tests, missing tests) is escalated to a human.
-    repairable: bool
-    escalations: list[str] = Field(default_factory=list)
+class Verdict(BaseModel):
+    kind: VerdictKind
+    headline: str
+    blockers: list[str]          # reasons for ⛔
+    checks: list[str]            # reasons for 🟡
+    human_review: list[str]      # what a person still has to look at, whatever the verdict
+
+
+class PullRequestInfo(BaseModel):
+    repo: str | None = None
+    number: int | None = None
+    title: str = "Local review"
+    author: str | None = None
+    url: str | None = None
+    base: str
+    head: str
+    linked_issue: int | None = None
+
+
+class StageResult(BaseModel):
+    status: StageStatus
+    summary: str = ""
+    duration_ms: int = 0
 
 
 class Report(BaseModel):
-    iteration: int
-    code: str
-    issues: list[Issue]
-    tests: list[TestResult]
-    test_load_error: str | None = None
-    coverage: Coverage | None
-    mutants: list[Mutant]
-    requirements: list[RequirementTrace]
-    functions: list[FunctionMetric]
-    maintainability_index: float | None
-    scores: Scores
-    gate: Gate
-    lines_of_code: int
-
-
-class RunRequest(BaseModel):
-    spec: str
-    code: str = ""
-    tests: str
-    sample_id: str | None = None
-    generate: bool = False
-    auto_repair: bool = True
-    max_iterations: int = Field(default=3, ge=1, le=5)
-    allowed_packages: list[str] = Field(default_factory=list)
-
-
-class Sample(BaseModel):
     id: str
-    title: str
-    tagline: str
-    spec: str
-    tests: str
-    # What the "AI" first produced — deliberately flawed so the gate has something to catch.
-    generated: str
-    # Recorded fix used in replay mode (no API key needed for the demo).
-    repaired: str
+    created_at: str
+    pr: PullRequestInfo
+    changed_files: list[ChangedFile]
+    criteria: list[ACTrace]
+    findings: list[Finding]
+    tests: list[TestResult]
+    test_error: str | None = None
+    coverage: DiffCoverage | None
+    mutants: list[Mutant]
+    functions: list[FunctionMetric]
+    ai_summary: str | None = None
+    ai_enabled: bool = False
+    stages: dict[str, StageResult]
+    scores: Scores
+    overall: int
+    verdict: Verdict

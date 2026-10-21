@@ -1,32 +1,21 @@
-import type { Health, PipelineEvent, Sample } from "./types";
+import type { Health, Report, ReportSummary, StreamEvent } from "./types";
 
-export async function getHealth(): Promise<Health> {
-  const r = await fetch("/api/health");
-  if (!r.ok) throw new Error(`health ${r.status}`);
+async function json<T>(r: Response): Promise<T> {
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json();
 }
 
-export async function getSamples(): Promise<Sample[]> {
-  const r = await fetch("/api/samples");
-  if (!r.ok) throw new Error(`samples ${r.status}`);
-  return r.json();
-}
+export const getHealth = () => fetch("/api/health").then((r) => json<Health>(r));
+export const getReports = () => fetch("/api/reports").then((r) => json<ReportSummary[]>(r));
+export const getReport = (id: string) => fetch(`/api/reports/${encodeURIComponent(id)}`).then((r) => json<Report>(r));
+export const syncRepo = (repo: string) =>
+  fetch("/api/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo }) })
+    .then((r) => json<{ open_prs: number; imported: number }>(r));
 
-export interface RunBody {
-  spec: string; code: string; tests: string; sample_id?: string;
-  generate: boolean; auto_repair: boolean; max_iterations: number;
-}
-
-/** POSTs a run and calls `onEvent` for every NDJSON line as it streams in. */
-export async function runGate(body: RunBody, onEvent: (e: PipelineEvent) => void, signal?: AbortSignal) {
-  const r = await fetch("/api/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!r.ok || !r.body) throw new Error(`run failed: ${r.status} ${await r.text()}`);
-
+/** POSTs and calls `onEvent` for every NDJSON line as it streams in. */
+export async function stream(url: string, body: unknown, onEvent: (e: StreamEvent) => void, signal?: AbortSignal) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}), signal });
+  if (!r.ok || !r.body) throw new Error(`${r.status} ${await r.text()}`);
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

@@ -1,0 +1,21 @@
+name: Sentinel review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]   # "edited": re-review when the PR description changes
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # Sentinel diffs the PR against its base
+      - uses: TianweiZhou/sentinel-ai-code-gate@v2
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional: enables the AI reviewer

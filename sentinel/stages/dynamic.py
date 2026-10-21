@@ -1,107 +1,127 @@
-"""Stages that execute the code: tests, coverage and mutation testing."""
+"""Checks that run the code: the repo's own test suite, coverage of changed lines, mutation testing on changed lines.
+
+Everything runs in a throwaway copy of the repository, never in the developer's checkout.
+"""
 
 from __future__ import annotations
 
 import ast
 import json
 import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
-from sentinel.models import Coverage, Mutant, TestResult
-from sentinel.workspace import SOLUTION, TESTS, Workspace
+from sentinel.config import Config
+from sentinel.models import ChangedFile, DiffCoverage, Mutant, TestResult
+from sentinel.proc import python
+from sentinel.stages.static import python_sources
+
+_IGNORE = shutil.ignore_patterns(".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
+                                 ".pytest_cache", ".ruff_cache", ".sentinel", "dist", "build", "*.egg-info")
+
+
+def sandbox_copy(root: Path) -> Path:
+    target = Path(tempfile.mkdtemp(prefix="sentinel-")) / "repo"
+    shutil.copytree(root, target, ignore=_IGNORE, symlinks=True)
+    return target
+
+
+def _paths(root: Path) -> list[str]:
+    return [str(root), str(root / "src")]
 
 
 @dataclass
 class TestRun:
     results: list[TestResult]
-    coverage: Coverage | None
-    load_error: str | None
+    coverage: DiffCoverage | None
+    error: str | None
 
 
-def run_tests(ws: Workspace) -> TestRun:
-    run = ws.run("-m", "coverage", "run", "--branch", "--source=solution", "-m", "pytest",
-                 "-q", "-p", "no:cacheprovider", "--timeout=5", TESTS, timeout=90)
-    results_file = ws.dir / "sentinel_results.json"
+def run_tests(sandbox: Path, files: list[ChangedFile]) -> TestRun:
+    results_file = sandbox / ".sentinel-results.json"
+    run = python("-m", "coverage", "run", "--branch", "--source=.", "--data-file=.sentinel-coverage",
+                 "-m", "pytest", "-q", "-p", "sentinel.pytest_plugin", "-p", "no:cacheprovider",
+                 cwd=sandbox, timeout=600, env={"SENTINEL_RESULTS": str(results_file)}, pythonpath=_paths(sandbox))
     if run.timed_out:
-        return TestRun([], None, "Test run exceeded 90s and was killed.")
-    if not results_file.exists():
-        return TestRun([], None, (run.stdout + run.stderr)[-1500:] or "pytest produced no results.")
-
-    results = [TestResult(**r) for r in json.loads(results_file.read_text())]
-    load_error = None
+        return TestRun([], None, "The test suite exceeded 10 minutes and was stopped.")
+    results = [TestResult(**r) for r in json.loads(results_file.read_text())] if results_file.exists() else []
+    error = None
     if not results:
-        load_error = (run.stdout + run.stderr)[-1500:] or "No tests were collected."
-
-    ws.run("-m", "coverage", "json", "-o", "coverage.json", "-q")
-    cov = None
-    cov_file = ws.dir / "coverage.json"
-    if cov_file.exists():
-        data = json.loads(cov_file.read_text())
-        f = data["files"].get(SOLUTION)
-        if f:
-            s = f["summary"]
-            branches = s.get("num_branches", 0)
-            cov = Coverage(
-                line_percent=round(100 * s["covered_lines"] / max(s["num_statements"], 1), 1),
-                branch_percent=round(100 * s["covered_branches"] / branches, 1) if branches else None,
-                missing_lines=f["missing_lines"],
-            )
-    return TestRun(results, cov, load_error)
+        error = (run.stdout + run.stderr)[-2000:] or "No tests were collected."
+    elif run.returncode not in (0, 1):  # 1 = some tests failed (already in results); anything else = crash
+        error = (run.stdout + run.stderr)[-2000:]
+    return TestRun(results, _diff_coverage(sandbox, files), error)
 
 
-# --- mutation testing ----------------------------------------------------------
-# "Who tests the tests?" We plant small bugs in the code. A good test suite fails
-# for each one ("kills" the mutant). Surviving mutants show behaviour nobody checks.
+def _diff_coverage(sandbox: Path, files: list[ChangedFile]) -> DiffCoverage | None:
+    out = sandbox / ".sentinel-coverage.json"
+    python("-m", "coverage", "json", "--data-file=.sentinel-coverage", "-o", str(out), "-q", cwd=sandbox)
+    if not out.exists():
+        return None
+    data = json.loads(out.read_text())["files"]
+    covered = total = 0
+    uncovered: dict[str, list[int]] = {}
+    for f in python_sources(files, include_tests=False):
+        entry = data.get(f.path)
+        if entry is None:
+            continue
+        executable = set(entry["executed_lines"]) | set(entry["missing_lines"])
+        changed = [ln for ln in f.added_lines if ln in executable]
+        missed = [ln for ln in changed if ln in set(entry["missing_lines"])]
+        total += len(changed)
+        covered += len(changed) - len(missed)
+        if missed:
+            uncovered[f.path] = missed
+    return DiffCoverage(covered=covered, total=total, percent=round(100 * covered / total, 1) if total else None,
+                        uncovered=uncovered)
 
-_COMPARE_SWAP: dict[type[ast.cmpop], type[ast.cmpop]] = {
+
+# --- mutation testing on changed lines -------------------------------------------------
+# "Who tests the tests?" Plant a small bug on a line the PR added; good tests fail ("kill" it).
+
+_COMPARE: dict[type[ast.cmpop], type[ast.cmpop]] = {
     ast.Lt: ast.LtE, ast.LtE: ast.Lt, ast.Gt: ast.GtE, ast.GtE: ast.Gt,
     ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.In: ast.NotIn, ast.NotIn: ast.In,
 }
-_BINOP_SWAP: dict[type[ast.operator], type[ast.operator]] = {
+_BINOP: dict[type[ast.operator], type[ast.operator]] = {
     ast.Add: ast.Sub, ast.Sub: ast.Add, ast.Mult: ast.Div, ast.Div: ast.Mult, ast.FloorDiv: ast.Mult,
 }
-_SYMBOL = {ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">=", ast.Eq: "==", ast.NotEq: "!=",
-           ast.In: "in", ast.NotIn: "not in", ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/",
-           ast.FloorDiv: "//", ast.And: "and", ast.Or: "or"}
+_SYM = {ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">=", ast.Eq: "==", ast.NotEq: "!=", ast.In: "in",
+        ast.NotIn: "not in", ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.FloorDiv: "//"}
 
 
-def _mutation_points(tree: ast.Module) -> list[tuple[int, str]]:
-    """(node index in ast.walk order, description) for every mutable spot."""
-    points = []
-    for i, node in enumerate(ast.walk(tree)):
-        line = getattr(node, "lineno", 0)
-        if isinstance(node, ast.Compare) and type(node.ops[0]) in _COMPARE_SWAP:
-            a, b = type(node.ops[0]), _COMPARE_SWAP[type(node.ops[0])]
-            points.append((i, f"line {line}: `{_SYMBOL[a]}` → `{_SYMBOL[b]}`"))
-        elif isinstance(node, ast.BinOp) and type(node.op) in _BINOP_SWAP:
-            a2, b2 = type(node.op), _BINOP_SWAP[type(node.op)]
-            points.append((i, f"line {line}: `{_SYMBOL[a2]}` → `{_SYMBOL[b2]}`"))
-        elif isinstance(node, ast.BoolOp):
-            points.append((i, f"line {line}: `{_SYMBOL[type(node.op)]}` → `{'or' if isinstance(node.op, ast.And) else 'and'}`"))
-        elif isinstance(node, ast.Constant) and isinstance(node.value, bool):
-            points.append((i, f"line {line}: `{node.value}` → `{not node.value}`"))
-        elif isinstance(node, ast.Constant) and type(node.value) is int and line:
-            points.append((i, f"line {line}: `{node.value}` → `{node.value + 1}`"))
-        elif isinstance(node, ast.Return) and node.value is not None and not (
-                isinstance(node.value, ast.Constant) and node.value.value is None):
-            points.append((i, f"line {line}: `return …` → `return None`"))
-    return points
+def _describe(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Compare) and type(node.ops[0]) in _COMPARE:
+        return f"`{_SYM[type(node.ops[0])]}` → `{_SYM[_COMPARE[type(node.ops[0])]]}`"
+    if isinstance(node, ast.BinOp) and type(node.op) in _BINOP:
+        return f"`{_SYM[type(node.op)]}` → `{_SYM[_BINOP[type(node.op)]]}`"
+    if isinstance(node, ast.BoolOp):
+        return "`and` → `or`" if isinstance(node.op, ast.And) else "`or` → `and`"
+    if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+        return f"`{node.value}` → `{not node.value}`"
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return f"`{node.value}` → `{node.value + 1}`"
+    if isinstance(node, ast.Return) and node.value is not None and not (
+            isinstance(node.value, ast.Constant) and node.value.value is None):
+        return "`return …` → `return None`"
+    return None
 
 
-def _apply(code: str, index: int) -> str:
-    tree = ast.parse(code)
+def _mutate(source: str, index: int) -> str:
+    tree = ast.parse(source)
     node = list(ast.walk(tree))[index]
     if isinstance(node, ast.Compare):
-        node.ops[0] = _COMPARE_SWAP[type(node.ops[0])]()
+        node.ops[0] = _COMPARE[type(node.ops[0])]()
     elif isinstance(node, ast.BinOp):
-        node.op = _BINOP_SWAP[type(node.op)]()
+        node.op = _BINOP[type(node.op)]()
     elif isinstance(node, ast.BoolOp):
         node.op = ast.Or() if isinstance(node.op, ast.And) else ast.And()
     elif isinstance(node, ast.Constant) and isinstance(node.value, bool):
         node.value = not node.value
     elif isinstance(node, ast.Constant) and isinstance(node.value, int):
-        node.value = node.value + 1
+        node.value += 1
     elif isinstance(node, ast.Return):
         node.value = ast.Constant(value=None)
     return ast.unparse(tree)
@@ -109,30 +129,41 @@ def _apply(code: str, index: int) -> str:
 
 def _docstring_lines(tree: ast.Module) -> set[int]:
     lines: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-            lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str):
+            lines.update(range(n.lineno, (n.end_lineno or n.lineno) + 1))
     return lines
 
 
-def mutation(ws: Workspace, code: str, max_mutants: int = 24) -> list[Mutant]:
-    tree = ast.parse(code)
-    skip = _docstring_lines(tree)
-    points = [p for p in _mutation_points(tree) if int(p[1].split(":")[0].removeprefix("line ")) not in skip]
-    if len(points) > max_mutants:  # sample evenly across the file so the run stays fast
-        step = len(points) / max_mutants
-        points = [points[int(i * step)] for i in range(max_mutants)]
+def mutation(sandbox: Path, files: list[ChangedFile], cfg: Config) -> list[Mutant]:
+    candidates: list[tuple[str, int, int, str]] = []  # path, node index, line, description
+    for f in python_sources(files, include_tests=False):
+        source = (sandbox / f.path).read_text()
+        tree = ast.parse(source)
+        skip, added = _docstring_lines(tree), set(f.added_lines)
+        for i, node in enumerate(ast.walk(tree)):
+            line = getattr(node, "lineno", 0)
+            desc = _describe(node)
+            if desc and line in added and line not in skip:
+                candidates.append((f.path, i, line, desc))
+    if len(candidates) > cfg.max_mutants:  # sample evenly so big PRs stay fast
+        step = len(candidates) / cfg.max_mutants
+        candidates = [candidates[int(i * step)] for i in range(cfg.max_mutants)]
 
-    def run_one(mid: int, index: int, description: str) -> Mutant:
-        line = int(description.split(":")[0].removeprefix("line "))
-        target = ws.clone_with(_apply(code, index))
+    def run_one(mid: int, path: str, index: int, line: int, desc: str) -> Mutant:
+        copy = Path(tempfile.mkdtemp(prefix="sentinel-mutant-")) / "repo"
+        shutil.copytree(sandbox, copy, ignore=_IGNORE, symlinks=True)
         try:
-            r = ws.run("-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", "--timeout=3", TESTS,
-                       timeout=30, cwd=target)
-            killed = r.returncode != 0  # any failure, error or timeout means the tests noticed
+            (copy / path).write_text(_mutate((copy / path).read_text(), index))
+            # Load the plugin here too: repos using --strict-markers would otherwise error on @req
+            # and every mutant would look "killed".
+            r = python("-m", "pytest", "-x", "-q", "-p", "sentinel.pytest_plugin", "-p", "no:cacheprovider",
+                       cwd=copy, timeout=120,
+                       pythonpath=_paths(copy))
+            killed = r.returncode != 0
         finally:
-            shutil.rmtree(target, ignore_errors=True)
-        return Mutant(id=mid, line=line, description=description, killed=killed)
+            shutil.rmtree(copy.parent, ignore_errors=True)
+        return Mutant(id=mid, path=path, line=line, description=desc, killed=killed)
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        return list(pool.map(lambda a: run_one(*a), [(i + 1, idx, d) for i, (idx, d) in enumerate(points)]))
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        return list(pool.map(lambda c: run_one(*c), [(i + 1, *c) for i, c in enumerate(candidates)]))
