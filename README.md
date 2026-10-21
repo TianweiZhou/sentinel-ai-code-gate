@@ -1,5 +1,13 @@
 # Sentinel: a quality gate for AI-generated Python
 
+[![CI](https://github.com/TianweiZhou/sentinel-ai-code-gate/actions/workflows/ci.yml/badge.svg)](https://github.com/TianweiZhou/sentinel-ai-code-gate/actions/workflows/ci.yml)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB)
+![mypy strict](https://img.shields.io/badge/mypy-strict-2A6DB2)
+
+![Sentinel dashboard: the AI's first draft is blocked at 55, the repaired version passes at 99](docs/demo.webp)
+
+<sub>The *User sign-up* scenario: the AI's draft is blocked (SQL injection, MD5 passwords, missed requirements), the failures go back to the AI, and the repair passes. Replay mode, no API key needed.</sub>
+
 > **The problem:** AI can write code faster than anyone can review it, and the code usually *looks* right.
 > **The idea:** treat every AI change like a pull request from a new teammate. It has to **prove** it meets the
 > requirements before it merges, and if it can't, the AI gets the exact failures back and fixes them.
@@ -14,7 +22,7 @@ It runs in three places, all using the same engine:
 |---|---|
 | **Dashboard** | Animated web UI that streams each stage live, with an iteration timeline, the repair diff, requirement traceability and mutation results |
 | **CLI** | `python -m sentinel check solution.py --tests test_solution.py --spec SPEC.md` (exit code 1 = blocked) |
-| **GitHub Action** | `uses: TianweiZhou/sentinel-ai-code-gate@main` in any repo. Posts the score as a PR comment and fails the check when blocked |
+| **GitHub Action** | `uses: TianweiZhou/sentinel-ai-code-gate@v1.0.0` in any repo. Posts the score as a PR comment and fails the check when blocked |
 
 ---
 
@@ -117,7 +125,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: TianweiZhou/sentinel-ai-code-gate@main
+      - uses: TianweiZhou/sentinel-ai-code-gate@v1.0.0
         with:
           code: src/billing.py
           tests: tests/test_billing.py
