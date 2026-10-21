@@ -1,0 +1,83 @@
+name: Sentinel AI Code Quality Gate
+description: >
+  Gate AI-generated Python before it merges: ruff, mypy --strict, bandit, radon complexity,
+  hallucinated-import detection, pytest + coverage, mutation testing and requirement tracing.
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  code:
+    description: Path to the module under test (the tests import it as `solution`).
+    required: true
+  tests:
+    description: Path to the pytest file. Mark tests with @pytest.mark.req("R1").
+    required: true
+  spec:
+    description: Path to the spec with numbered requirements (R1:, R2:, ...).
+    required: true
+  allow:
+    description: Space-separated list of approved third-party packages.
+    required: false
+    default: ""
+  repair:
+    description: Ask Claude to repair blocked code (needs ANTHROPIC_API_KEY in env). The repaired file is reported, never committed.
+    required: false
+    default: "false"
+  comment:
+    description: Post the result as a sticky pull-request comment.
+    required: false
+    default: "true"
+
+outputs:
+  passed:
+    description: "'true' when the gate passed."
+    value: ${{ steps.gate.outputs.passed }}
+  score:
+    description: Overall quality score (0-100).
+    value: ${{ steps.gate.outputs.score }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install Sentinel
+      shell: bash
+      run: pip install --quiet "${{ github.action_path }}"
+
+    - name: Run the gate
+      id: gate
+      shell: bash
+      run: |
+        set +e
+        ALLOW=""
+        for pkg in ${{ inputs.allow }}; do ALLOW="$ALLOW --allow $pkg"; done
+        REPAIR=""
+        if [ "${{ inputs.repair }}" = "true" ]; then REPAIR="--repair"; fi
+        sentinel check "${{ inputs.code }}" --tests "${{ inputs.tests }}" --spec "${{ inputs.spec }}" \
+          $ALLOW $REPAIR --json sentinel-report.json --markdown sentinel-report.md
+        STATUS=$?
+        cat sentinel-report.md >> "$GITHUB_STEP_SUMMARY"
+        echo "passed=$([ $STATUS -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        echo "score=$(python -c 'import json;print(json.load(open("sentinel-report.json"))["gate"]["overall"])')" >> "$GITHUB_OUTPUT"
+        echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+    - name: Comment on the pull request
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" \
+          --body-file sentinel-report.md --edit-last --create-if-none || \
+        gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body-file sentinel-report.md
+
+    - name: Fail when blocked
+      if: steps.gate.outputs.status != '0'
+      shell: bash
+      run: |
+        echo "::error title=Sentinel gate blocked::Score ${{ steps.gate.outputs.score }}/100 — see the job summary for blockers."
+        exit 1

@@ -1,0 +1,12 @@
+node_modules/
+web/dist/
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+sentinel-report.*
+.DS_Store
+.claude/
