@@ -105,7 +105,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <h1>Sentinel</h1>
+          <h1>Sentinel <span className="ver">v2.0 · REVIEW CONSOLE</span></h1>
           <p>Merge-readiness review for agent-written pull requests</p>
         </div>
         <div className="toolbar">

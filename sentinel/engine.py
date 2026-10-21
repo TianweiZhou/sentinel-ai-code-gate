@@ -74,7 +74,7 @@ def review(root: Path, base: str, head: str = "HEAD", pr: PullRequestInfo | None
     findings: list[Finding] = []
 
     yield from r.run("diff", lambda: repo.changed_files(root, base, head),
-                     lambda fs: ("pass", f"{len(fs)} files, +{sum(len(f.added_lines) for f in fs)}"))
+                     lambda fs: ("pass", f"+{sum(len(f.added_lines) for f in fs)} lines"))
     files: list[ChangedFile] = r.result
 
     criteria = requirements.collect(pr_body, issue_body, pr.linked_issue)
